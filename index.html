@@ -256,6 +256,17 @@
       cursor: pointer;
     }
 
+    .map-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .map-link:hover,
+    .name-link:hover {
+      text-decoration: underline;
+    }
+
     .badge {
       display: inline-flex;
       align-items: center;
@@ -553,6 +564,7 @@
               <th>種別</th>
               <th>ステージ</th>
               <th>温度感</th>
+              <th>Map</th>
               <th>最終接触日</th>
               <th>次回期限</th>
               <th>主要懸念</th>
@@ -591,6 +603,7 @@
           <div class="field span-2">
             <label for="detailGoogleMapLink">GoogleMapリンク</label>
             <input id="detailGoogleMapLink" name="googleMapLink" type="url" />
+            <span class="field-hint"><a class="map-link" id="detailGoogleMapOpen" href="#" target="_blank" rel="noopener noreferrer">GoogleMapを開く</a></span>
           </div>
           <div class="field">
             <label for="detailContactMethod">連絡手段</label>
@@ -695,6 +708,7 @@
     const emptyState = document.getElementById("emptyState");
     const detailDialog = document.getElementById("detailDialog");
     const dialogTitle = document.getElementById("dialogTitle");
+    const detailGoogleMapOpen = document.getElementById("detailGoogleMapOpen");
 
     function loadRecords() {
       try {
@@ -815,6 +829,7 @@
           <td>${escapeHtml(record.facilityType || "-")}</td>
           <td>${makeBadge(record.stage, `stage-${record.stage}`)}</td>
           <td>${makeBadge(record.temperature, `temp-${record.temperature}`)}</td>
+          <td>${record.googleMapLink ? `<a class="map-link" href="${escapeHtml(record.googleMapLink)}" target="_blank" rel="noopener noreferrer">Open</a>` : "-"}</td>
           <td>${escapeHtml(formatDate(record.lastContactDate))}</td>
           <td>${escapeHtml(formatDate(record.nextDeadline))}</td>
           <td>${escapeHtml(record.concern || "-")}</td>
@@ -855,7 +870,20 @@
       editingId = id;
       dialogTitle.textContent = record.facilityName || "施設詳細";
       setFormValues(detailForm, record, "detail");
+      syncDetailMapLink(record.googleMapLink || "");
       detailDialog.showModal();
+    }
+
+    function syncDetailMapLink(url) {
+      if (url) {
+        detailGoogleMapOpen.href = url;
+        detailGoogleMapOpen.style.pointerEvents = "auto";
+        detailGoogleMapOpen.style.opacity = "1";
+      } else {
+        detailGoogleMapOpen.href = "#";
+        detailGoogleMapOpen.style.pointerEvents = "none";
+        detailGoogleMapOpen.style.opacity = "0.45";
+      }
     }
 
     function setFormValues(form, record, prefix = "") {
@@ -996,6 +1024,9 @@
       document.getElementById("resetFormButton").addEventListener("click", resetForm);
       document.getElementById("closeDialogButton").addEventListener("click", () => detailDialog.close());
       document.getElementById("cancelDialogButton").addEventListener("click", () => detailDialog.close());
+      document.getElementById("detailGoogleMapLink").addEventListener("input", (event) => {
+        syncDetailMapLink(event.target.value.trim());
+      });
 
       document.getElementById("deleteRecordButton").addEventListener("click", () => {
         if (!editingId) return;
