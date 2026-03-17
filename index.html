@@ -4,6 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>宿泊施設提携進捗ダッシュボード（特定小型原付シェア）</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
   <style>
     :root {
       --bg: #eef4fb;
@@ -319,6 +325,31 @@
       font-size: 14px;
     }
 
+    .map-panel {
+      padding: 20px 24px 24px;
+    }
+
+    .map-shell {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    #facilityMap {
+      width: 100%;
+      height: 420px;
+    }
+
+    .map-note {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 12px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      background: #f8fbff;
+    }
+
     dialog {
       width: min(980px, calc(100% - 24px));
       border: 0;
@@ -577,6 +608,14 @@
       </div>
       <div class="empty" id="emptyState">まだレコードがありません。上のフォームから追加してください。</div>
     </section>
+
+    <section class="panel map-panel">
+      <h2 class="section-title">施設マップ</h2>
+      <div class="map-shell">
+        <div id="facilityMap"></div>
+        <p class="map-note">GoogleMapリンクに座標が含まれている場合はその座標を優先し、含まれない場合は住所から位置を補完します。フィルタ結果に連動して表示が切り替わります。</p>
+      </div>
+    </section>
   </main>
 
   <dialog id="detailDialog">
@@ -680,8 +719,14 @@
     </div>
   </dialog>
 
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
   <script>
     const STORAGE_KEY = "nanoact-hotel-partnership-records-v1";
+    const GEO_CACHE_KEY = "nanoact-hotel-partnership-geo-cache-v1";
 
     const optionSets = {
       facilityType: ["ホテル", "旅館", "民泊"],
@@ -701,6 +746,10 @@
 
     let records = loadRecords();
     let editingId = null;
+    let map;
+    let mapLayerGroup;
+    let mapRenderToken = 0;
+    const geoCache = loadGeoCache();
 
     const recordForm = document.getElementById("recordForm");
     const detailForm = document.getElementById("detailForm");
@@ -722,6 +771,20 @@
 
     function saveRecords() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    }
+
+    function loadGeoCache() {
+      try {
+        const raw = localStorage.getItem(GEO_CACHE_KEY);
+        return raw ? JSON.parse(raw) : {};
+      } catch (error) {
+        console.error(error);
+        return {};
+      }
+    }
+
+    function saveGeoCache() {
+      localStorage.setItem(GEO_CACHE_KEY, JSON.stringify(geoCache));
     }
 
     function fillSelect(select, values, emptyLabel = "") {
@@ -861,6 +924,118 @@
     function renderAll() {
       renderKpis();
       renderTable();
+      renderMap();
+    }
+
+    function initMap() {
+      map = L.map("facilityMap", {
+        center: [33.2795, 131.4976],
+        zoom: 12
+      });
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      }).addTo(map);
+
+      mapLayerGroup = L.layerGroup().addTo(map);
+    }
+
+    function parseLatLngFromGoogleMapLink(url) {
+      if (!url) return null;
+
+      const decodedUrl = decodeURIComponent(url);
+      const patterns = [
+        /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+        /[?&]q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+        /[?&]ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+        /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+        /(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/
+      ];
+
+      for (const pattern of patterns) {
+        const match = decodedUrl.match(pattern);
+        if (match) {
+          return [Number(match[1]), Number(match[2])];
+        }
+      }
+
+      return null;
+    }
+
+    async function geocodeAddress(address) {
+      const key = address.trim();
+      if (!key) return null;
+
+      if (geoCache[key]) return geoCache[key];
+
+      try {
+        const url = new URL("https://nominatim.openstreetmap.org/search");
+        url.searchParams.set("format", "jsonv2");
+        url.searchParams.set("limit", "1");
+        url.searchParams.set("q", key);
+
+        const response = await fetch(url.toString(), {
+          headers: {
+            Accept: "application/json"
+          }
+        });
+
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        if (!data.length) return null;
+
+        const coords = [Number(data[0].lat), Number(data[0].lon)];
+        geoCache[key] = coords;
+        saveGeoCache();
+        return coords;
+      } catch (error) {
+        console.error(error);
+        return null;
+      }
+    }
+
+    async function resolveRecordCoords(record) {
+      const fromLink = parseLatLngFromGoogleMapLink(record.googleMapLink || "");
+      if (fromLink) return fromLink;
+      if (record.address) return geocodeAddress(record.address);
+      return null;
+    }
+
+    async function renderMap() {
+      if (!map || !mapLayerGroup) return;
+
+      const token = ++mapRenderToken;
+      mapLayerGroup.clearLayers();
+
+      const filtered = getFilteredRecords();
+      const bounds = [];
+
+      for (const record of filtered) {
+        const coords = await resolveRecordCoords(record);
+        if (token !== mapRenderToken) return;
+        if (!coords) continue;
+
+        const marker = L.marker(coords);
+        const mapLink = record.googleMapLink
+          ? `<p style="margin:8px 0 0;"><a href="${escapeHtml(record.googleMapLink)}" target="_blank" rel="noopener noreferrer">GoogleMapを開く</a></p>`
+          : "";
+        marker.bindPopup(`
+          <strong>${escapeHtml(record.facilityName || "名称未入力")}</strong><br>
+          ${escapeHtml(record.facilityType || "-")} / ${escapeHtml(record.stage || "-")} / 温度感 ${escapeHtml(record.temperature || "-")}<br>
+          ${escapeHtml(record.address || "-")}
+          ${mapLink}
+        `);
+        marker.addTo(mapLayerGroup);
+        bounds.push(coords);
+      }
+
+      if (bounds.length) {
+        map.fitBounds(bounds, { padding: [24, 24] });
+      } else {
+        map.setView([33.2795, 131.4976], 12);
+      }
     }
 
     function openDetail(id) {
@@ -1042,6 +1217,7 @@
     }
 
     setupSelects();
+    initMap();
     bindEvents();
     resetForm();
     renderAll();
